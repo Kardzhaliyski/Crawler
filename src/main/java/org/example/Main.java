@@ -10,7 +10,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.*;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -22,19 +22,18 @@ public class Main {
     public static Set<String> visitedLinks = Collections.synchronizedSet(new HashSet<>());
     public static BlockingQueue<String> tasks = new LinkedBlockingQueue<>();
     public static String baseUri;
-    public static int pageCount = 0;
-    public static final ReentrantLock PAGE_COUNT_LOCK = new ReentrantLock();
-    public static int imgCount = 0;
-    public static final ReentrantLock IMAGE_COUNT_LOCK = new ReentrantLock();
+    public static AtomicInteger pageCount = new AtomicInteger(0);
+    public static AtomicInteger imgCount = new AtomicInteger(0);
+
 
     public static void main(String[] args) throws IOException, InterruptedException {
-        if(args.length != 1) {
+        if (args.length != 1) {
             System.out.println("Invalid input!");
             System.out.println("Usage: crawl [url]]");
             return;
         }
         String inputUrl = args[0];
-        if(!LINK_VERIFYING_PATTERN.matcher(inputUrl).matches()) {
+        if (!LINK_VERIFYING_PATTERN.matcher(inputUrl).matches()) {
             inputUrl = "https://" + inputUrl;
         }
 
@@ -56,15 +55,16 @@ public class Main {
                 threadPool.submit(crawlTask);
             }
         } finally {
-            if(threadPool != null) {
+            if (threadPool != null) {
                 threadPool.shutdown();
                 threadPool.awaitTermination(1, TimeUnit.HOURS);
+                System.out.println("tasks queue is empty: " + tasks.isEmpty());
             }
         }
 
 
         System.out.println("---------------------------------------");
-        System.out.printf("Pages crawled: %d. Downloaded images: %d." , pageCount, imgCount);
+        System.out.printf("Pages crawled: %d. Downloaded images: %d.", pageCount.get(), imgCount.get());
     }
 
     public static void crawl(String url) throws IOException, InterruptedException {
@@ -74,7 +74,7 @@ public class Main {
     public static void crawl(Document document) throws InterruptedException, IOException {
         System.out.println("Extracting data from : " + document.baseUri());
 
-        incrementPageCount();
+        pageCount.incrementAndGet();
 
         extractLinks(document);
         extractImages(document);
@@ -89,7 +89,7 @@ public class Main {
             }
 
             int i = href.indexOf('#');
-            if(i != -1) {
+            if (i != -1) {
                 href = href.substring(0, i);
             }
 
@@ -129,21 +129,9 @@ public class Main {
             }
 
             if (downloadedImages.add(name)) {
-                incrementImageCount();
+                imgCount.incrementAndGet();
             }
         }
-    }
-
-    private static void incrementImageCount() {
-        IMAGE_COUNT_LOCK.lock();
-        imgCount++;
-        IMAGE_COUNT_LOCK.unlock();
-    }
-
-    private static void incrementPageCount() {
-        PAGE_COUNT_LOCK.lock();
-        pageCount++;
-        PAGE_COUNT_LOCK.unlock();
     }
 
     private static Runnable getCrawlTask(String url) {
