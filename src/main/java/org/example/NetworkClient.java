@@ -10,9 +10,11 @@ import java.nio.file.Path;
 
 public class NetworkClient {
     private final HttpClient client;
+    private final String userAgent;
 
-    public NetworkClient() {
+    public NetworkClient(String userAgent) {
         this.client = HttpClient.newHttpClient();
+        this.userAgent = userAgent;
     }
 
     public String getHtml(String url) throws URISyntaxException, IOException, InterruptedException {
@@ -22,11 +24,14 @@ public class NetworkClient {
     }
 
     public void download(String url, Path filePath) throws URISyntaxException, IOException, InterruptedException {
-        HttpRequest request = HttpRequest.newBuilder()
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(new URI(url))
-                .GET()
-                .build();
+                .GET();
+        if (userAgent != null) {
+            builder.header("user-agent", userAgent);
+        }
 
+        HttpRequest request = builder.build();
         HttpResponse<Path> send = client.send(request, HttpResponse.BodyHandlers.ofFile(filePath));
     }
 }
