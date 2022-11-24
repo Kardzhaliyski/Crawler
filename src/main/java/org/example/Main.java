@@ -6,6 +6,8 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.io.*;
+import java.net.URISyntaxException;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
@@ -18,6 +20,7 @@ public class Main {
     public static final Pattern LINK_VERIFYING_PATTERN = Pattern.compile("^(/|http[s]?:/).+");
     public static final Pattern IMAGE_NAME_PATTERN = Pattern.compile("(?<=/)([^/?])+(?=$|\\?)");
     private static final String IMAGE_DIRECTORY = "C:\\Users\\Zdravko\\Pictures\\crawler\\";
+    private static final NetworkClient client = new NetworkClient();
     public static Set<String> downloadedImages = Collections.synchronizedSet(new HashSet<>());
     public static Set<String> visitedLinks = Collections.synchronizedSet(new HashSet<>());
     public static BlockingQueue<String> tasks = new LinkedBlockingQueue<>();
@@ -25,8 +28,9 @@ public class Main {
     public static AtomicInteger pageCount = new AtomicInteger(0);
     public static AtomicInteger imgCount = new AtomicInteger(0);
 
-
     public static void main(String[] args) throws IOException, InterruptedException {
+        long end = System.currentTimeMillis();
+        long start = System.currentTimeMillis();
         if (args.length != 1) {
             System.out.println("Invalid input!");
             System.out.println("Usage: crawl [url]]");
@@ -45,37 +49,42 @@ public class Main {
         ExecutorService threadPool = null;
         try {
             threadPool = Executors.newCachedThreadPool();
+            Future<?> lastTask = null;
+            AtomicInteger activeTasks = new AtomicInteger(0);
             while (true) {
-                String url = tasks.poll(10, TimeUnit.SECONDS);
+                String url = tasks.poll(2, TimeUnit.SECONDS);
                 if (url == null) {
-                    break;
+                    if (activeTasks.get() == 0) {
+                        break;
+                    }
                 }
 
-                Runnable crawlTask = getCrawlTask(url);
-                threadPool.submit(crawlTask);
+                Runnable crawlTask = getCrawlTask(url, activeTasks);
+                lastTask = threadPool.submit(crawlTask);
             }
         } finally {
-            if (threadPool != null) {
                 threadPool.shutdown();
                 threadPool.awaitTermination(1, TimeUnit.HOURS);
-                System.out.println("tasks queue is empty: " + tasks.isEmpty());
-            }
+                end = System.currentTimeMillis();
+//                System.out.println("tasks queue is empty: " + tasks.isEmpty());
         }
-
 
         System.out.println("---------------------------------------");
         System.out.printf("Pages crawled: %d. Downloaded images: %d.", pageCount.get(), imgCount.get());
+        System.out.printf(" Time: %dms.", end - start);
     }
 
-    public static void crawl(String url) throws IOException, InterruptedException {
-        crawl(Jsoup.connect(url).get());
+    public static void crawl(String url) throws IOException, InterruptedException, URISyntaxException {
+//        crawl(Jsoup.connect(url).get());
+        String html = client.getHtml(url);
+        Document document = Jsoup.parse(html);
+        document.setBaseUri(url);
+        crawl(document);
     }
 
     public static void crawl(Document document) throws InterruptedException, IOException {
         System.out.println("Extracting data from : " + document.baseUri());
-
         pageCount.incrementAndGet();
-
         extractLinks(document);
         extractImages(document);
     }
@@ -107,41 +116,47 @@ public class Main {
         }
     }
 
-    private static void extractImages(Document document) throws IOException {
+    private static void extractImages(Document document){
         Elements images = document.select("img[src]");
         for (Element img : images) {
-            String path = img.attr("abs:src");
+            String url = img.attr("abs:src");
 
-            Matcher matcher = IMAGE_NAME_PATTERN.matcher(path);
+            Matcher matcher = IMAGE_NAME_PATTERN.matcher(url);
             if (!matcher.find()) {
                 continue;
             }
 
-            String name = path.substring(matcher.start(), matcher.end());
+            String name = url.substring(matcher.start(), matcher.end());
 
             if (downloadedImages.contains(name)) {
                 continue;
             }
 
-            File file = new File(IMAGE_DIRECTORY + name);
-            try (FileOutputStream fileOutputStream = new FileOutputStream(file)) {
-                fileOutputStream.write(Jsoup.connect(path).ignoreContentType(true).execute().bodyAsBytes());
-            }
+            Path path = Path.of(IMAGE_DIRECTORY + name);
 
             if (downloadedImages.add(name)) {
                 imgCount.incrementAndGet();
             }
+
+            try {
+                client.download(url, path);
+            } catch (URISyntaxException | InterruptedException | IOException e) {
+                System.out.println("Error while downloading image: \"" + name + "\" from link: " + url + " error msg: " + e.getMessage());
+            }
         }
     }
 
-    private static Runnable getCrawlTask(String url) {
+    private static Runnable getCrawlTask(String url, AtomicInteger activeTasks) {
         return new Runnable() {
             @Override
             public void run() {
                 try {
+                    activeTasks.incrementAndGet();
                     crawl(url);
-                } catch (IOException | InterruptedException e) {
+                } catch (IOException | InterruptedException | URISyntaxException e) {
                     throw new RuntimeException(e);
+                } finally {
+                    activeTasks.decrementAndGet();
                 }
             }
         };
